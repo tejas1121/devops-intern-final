@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege by default; only the publish job is granted packages: write.
+permissions:
+  contents: read
+
+env:
+  # github.repository is "owner/name"; GHCR requires lowercase, which this repo already is.
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck scripts
+        run: shellcheck --version && shellcheck scripts/*.sh
+
+      - name: Hadolint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: app/Dockerfile
+
+  build:
+    needs: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg BUILD_SHA=${{ github.sha }} \
+            -t "$IMAGE_NAME:${{ github.sha }}" \
+            app
+          docker images "$IMAGE_NAME"
+
+      - name: Enforce image size under 60 MB
+        run: |
+          size=$(docker image inspect "$IMAGE_NAME:${{ github.sha }}" --format '{{.Size}}')
+          echo "Image size: $((size / 1024 / 1024)) MB"
+          test "$size" -lt $((60 * 1024 * 1024))
+
+      - name: Save image for later jobs
+        run: docker save "$IMAGE_NAME:${{ github.sha }}" | gzip > image.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: image.tar.gz
+          retention-days: 1
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+
+      - name: Load and start container
+        run: |
+          docker load < image.tar.gz
+          docker run -d --name app -p 8080:8080 "$IMAGE_NAME:${{ github.sha }}"
+
+      - name: Wait for readiness
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fs http://localhost:8080/healthz >/dev/null; then echo "ready"; exit 0; fi
+            sleep 1
+          done
+          echo "container did not become ready in 30s" >&2
+          exit 1
+
+      - name: Run healthcheck.sh
+        run: |
+          scripts/healthcheck.sh http://localhost:8080
+          scripts/healthcheck.sh http://localhost:8080/healthz
+
+      - name: Verify build SHA is served
+        run: |
+          curl -fs http://localhost:8080/ | grep -q "${{ github.sha }}"
+          curl -fsI http://localhost:8080/ | grep -i "x-build-sha: ${{ github.sha }}"
+
+      - name: Container logs
+        if: always()
+        run: docker logs app
+
+  publish:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push (commit SHA + latest)
+        run: |
+          docker load < image.tar.gz
+          docker tag "$IMAGE_NAME:${{ github.sha }}" "$IMAGE_NAME:latest"
+          docker push "$IMAGE_NAME:${{ github.sha }}"
+          docker push "$IMAGE_NAME:latest"
