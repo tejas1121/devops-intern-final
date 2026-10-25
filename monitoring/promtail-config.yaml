@@ -1,0 +1,43 @@
+# Promtail discovers containers through the Docker socket, so it sees both the plain
+# "docker run" app and containers started by Nomad's docker driver.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Every stream gets job="docker" unless a Nomad job name overrides it below.
+      - target_label: job
+        replacement: docker
+      # Container name without Docker's leading slash, e.g. "nginx-app".
+      - source_labels: [__meta_docker_container_name]
+        regex: "/(.*)"
+        target_label: container
+      # docker compose service name (loki, promtail, grafana, ...).
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        regex: "(.+)"
+        target_label: service
+      # Nomad docker driver labels. regex "(.+)" skips containers that lack them.
+      - source_labels: [__meta_docker_container_label_com_hashicorp_nomad_alloc_id]
+        regex: "(.+)"
+        target_label: nomad_alloc_id
+      - source_labels: [__meta_docker_container_label_com_hashicorp_nomad_job_name]
+        regex: "(.+)"
+        target_label: job
+      - source_labels: [__meta_docker_container_label_com_hashicorp_nomad_task_name]
+        regex: "(.+)"
+        target_label: service
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+    pipeline_stages:
+      - docker: {}
