@@ -26,7 +26,8 @@ services:
   grafana:
     image: grafana/grafana:11.3.0
     ports:
-      - "3000:3000"
+      # Override with GRAFANA_PORT=3001 if 3000 is already taken on the host.
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       # Anonymous admin is for local review only; see "Known Limitations" in the README.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
