@@ -1,0 +1,19 @@
+# IDE / editor metadata
+.idea/
+.vscode/
+*.iml
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local secrets and environment files
+.env
+.env.*
+*.pem
+*.key
+
+# Build and runtime artefacts
+*.tar
+*.tar.gz
+nomad-data/
+monitoring/data/
