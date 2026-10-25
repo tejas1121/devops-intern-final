@@ -73,6 +73,13 @@ job "nginx-app" {
       config {
         image = "${var.image_repo}:${var.image_tag}"
         ports = ["http"]
+
+        # Nomad only adds com.hashicorp.nomad.alloc_id by default; these let Promtail
+        # label log streams with job="nginx-app" and service="nginx".
+        labels = {
+          "com.hashicorp.nomad.job_name"  = "${NOMAD_JOB_NAME}"
+          "com.hashicorp.nomad.task_name" = "${NOMAD_TASK_NAME}"
+        }
       }
 
       # 100 MHz / 64 MB as specified; a static NGINX site idles at a few MB of RAM.
